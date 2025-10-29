@@ -2,19 +2,35 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuth } from '../../../contexts/AuthContext';
-import Sidebar from '../../../components/Sidebar';
-import Header from '../../../components/Header';
-import DataTable from '../../../components/shared/DataTable';
-import StatsCard from '../../../components/shared/StatsCard';
-import Modal from '../../../components/shared/Modal';
-import AdvancedFilter from '../../../components/shared/AdvancedFilter';
-import ExportButton from '../../../components/shared/ExportButton';
-import { ShoppingCart, Package, Truck, CheckCircle, XCircle, Eye, DollarSign, Users, TrendingUp, Clock, AlertCircle, Store, User } from 'lucide-react';
-import orderService from '../../../lib/services/orderService';
-import vendorService from '../../../lib/services/vendorService';
+import { useAuth } from '../../../../contexts/AuthContext';
+import Sidebar from '../../../../components/Sidebar';
+import Header from '../../../../components/Header';
+import DataTable from '../../../../components/shared/DataTable';
+import StatsCard from '../../../../components/shared/StatsCard';
+import Modal from '../../../../components/shared/Modal';
+import AdvancedFilter from '../../../../components/shared/AdvancedFilter';
+import ExportButton from '../../../../components/shared/ExportButton';
+import { 
+  RotateCcw, 
+  Clock, 
+  CheckCircle, 
+  XCircle,
+  Package,
+  Search,
+  Eye,
+  Edit,
+  DollarSign,
+  Users,
+  TrendingUp,
+  Store,
+  User,
+  AlertTriangle,
+  RefreshCw
+} from 'lucide-react';
+import orderService from '../../../../lib/services/orderService';
+import vendorService from '../../../../lib/services/vendorService';
 
-export default function OrdersPage() {
+export default function ReturnsPage() {
   const { user, isLoading, logout } = useAuth();
   const router = useRouter();
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -23,7 +39,7 @@ export default function OrdersPage() {
   const [loading, setLoading] = useState(true);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [showModal, setShowModal] = useState(false);
-  const [activeTab, setActiveTab] = useState('all-orders');
+  const [activeTab, setActiveTab] = useState('all-returns');
   const [vendorStats, setVendorStats] = useState([]);
   const [vendors, setVendors] = useState([]);
   const [selectedVendor, setSelectedVendor] = useState(null);
@@ -32,13 +48,11 @@ export default function OrdersPage() {
   const [showVendorStoreModal, setShowVendorStoreModal] = useState(false);
   const [stats, setStats] = useState({
     total: 0,
-    pending: 0,
-    accepted: 0,
+    cancelled: 0,
     rejected: 0,
-    other: 0,
-    processing: 0,
-    delivered: 0,
-    revenue: 0
+    refunded: 0,
+    returned: 0,
+    totalRefundAmount: 0
   });
 
   useEffect(() => {
@@ -51,20 +65,29 @@ export default function OrdersPage() {
       return;
     }
     if (user) {
-      fetchOrders();
+      fetchReturnsOrders();
       fetchVendors();
     }
   }, [user, isLoading, router]);
 
   const fetchVendors = async () => {
     try {
+      console.log('🔍 Fetching vendors...');
       const response = await vendorService.getAllVendors();
+      console.log('📊 Vendors API response:', response);
+      
       if (response.success) {
         setVendors(response.data || []);
         console.log('✅ Vendors fetched successfully:', response.data?.length || 0, 'vendors');
+      } else {
+        console.warn('⚠️ Vendors API returned unsuccessful response:', response);
+        setVendors([]);
       }
     } catch (error) {
       console.error('❌ Error fetching vendors:', error);
+      console.log('📝 This might be due to insufficient permissions (403 Forbidden)');
+      console.log('📝 Continuing without vendor data - vendor names will show as "Unknown Vendor"');
+      setVendors([]);
     }
   };
 
@@ -114,14 +137,11 @@ export default function OrdersPage() {
             storeId,
             storeName,
             totalOrders: 0,
-            pendingOrders: 0,
-            acceptedOrders: 0,
-            rejectedOrders: 0,
-            otherOrders: 0,
-            processingOrders: 0,
-            deliveredOrders: 0,
             cancelledOrders: 0,
-            totalRevenue: 0,
+            rejectedOrders: 0,
+            refundedOrders: 0,
+            returnedOrders: 0,
+            totalRefundAmount: 0,
             totalItems: 0
           });
         }
@@ -129,50 +149,68 @@ export default function OrdersPage() {
         const vendor = vendorMap.get(vendorStoreKey);
         vendor.totalOrders++;
         vendor.totalItems += item.quantity;
-        vendor.totalRevenue += (item.price * item.quantity);
         
         // Count orders by status
-        if (order.status === 'pending') vendor.pendingOrders++;
-        else if (order.status === 'accepted') vendor.acceptedOrders++;
+        if (order.status === 'cancelled') vendor.cancelledOrders++;
         else if (order.status === 'rejected') vendor.rejectedOrders++;
-        else if (order.status === 'other') vendor.otherOrders++;
-        else if (order.status === 'processing') vendor.processingOrders++;
-        else if (order.status === 'delivered') vendor.deliveredOrders++;
-        else if (order.status === 'cancelled') vendor.cancelledOrders++;
+        else if (order.status === 'refunded') {
+          vendor.refundedOrders++;
+          vendor.totalRefundAmount += (order.totalAmount || 0);
+        }
+        else if (order.status === 'returned') vendor.returnedOrders++;
       });
     });
     
-    return Array.from(vendorMap.values()).sort((a, b) => b.totalRevenue - a.totalRevenue);
+    return Array.from(vendorMap.values()).sort((a, b) => b.totalRefundAmount - a.totalRefundAmount);
   };
 
-  const fetchOrders = async () => {
+  const fetchReturnsOrders = async () => {
     try {
       setLoading(true);
+      console.log('🔍 Fetching returns orders...');
+      
       const response = await orderService.getAllOrders();
-      const ordersData = response.data || [];
-      setOrders(ordersData);
-      setFilteredOrders(ordersData);
+      console.log('📊 Orders API response:', response);
+      
+      const ordersData = response.data || response || [];
+      console.log('📦 Raw orders data:', ordersData.length, 'orders');
+      
+      // Filter orders that are cancelled, rejected, refunded, or returned
+      const returnsOrders = ordersData.filter(order => 
+        ['cancelled', 'rejected', 'refunded', 'returned'].includes(order.status)
+      );
+      
+      console.log('🔄 Filtered returns orders:', returnsOrders.length, 'orders');
+      console.log('📋 Sample return order:', returnsOrders[0]);
+      
+      setOrders(returnsOrders);
+      setFilteredOrders(returnsOrders);
       
       // Calculate overall stats
-      const total = ordersData.length;
-      const pending = ordersData.filter(o => o.status === 'pending').length;
-      const accepted = ordersData.filter(o => o.status === 'accepted').length;
-      const rejected = ordersData.filter(o => o.status === 'rejected').length;
-      const other = ordersData.filter(o => o.status === 'other').length;
-      const processing = ordersData.filter(o => o.status === 'processing').length;
-      const delivered = ordersData.filter(o => o.status === 'delivered').length;
-      const revenue = ordersData.reduce((sum, o) => sum + (o.totalAmount || 0), 0);
+      const total = returnsOrders.length;
+      const cancelled = returnsOrders.filter(o => o.status === 'cancelled').length;
+      const rejected = returnsOrders.filter(o => o.status === 'rejected').length;
+      const refunded = returnsOrders.filter(o => o.status === 'refunded').length;
+      const returned = returnsOrders.filter(o => o.status === 'returned').length;
+      const totalRefundAmount = returnsOrders
+        .filter(o => o.status === 'refunded')
+        .reduce((sum, o) => sum + (o.totalAmount || 0), 0);
       
-      setStats({ total, pending, accepted, rejected, other, processing, delivered, revenue });
+      setStats({ total, cancelled, rejected, refunded, returned, totalRefundAmount });
       
       // Calculate vendor stats
-      const vendorStatsData = calculateVendorStats(ordersData);
+      const vendorStatsData = calculateVendorStats(returnsOrders);
       setVendorStats(vendorStatsData);
       
-      console.log('✅ Orders fetched successfully:', ordersData.length, 'orders');
+      console.log('✅ Returns orders fetched successfully:', returnsOrders.length, 'orders');
       console.log('📊 Vendor stats calculated:', vendorStatsData.length, 'vendors');
     } catch (error) {
-      console.error('❌ Error fetching orders:', error);
+      console.error('❌ Error fetching returns orders:', error);
+      // Set empty data on error
+      setOrders([]);
+      setFilteredOrders([]);
+      setStats({ total: 0, cancelled: 0, rejected: 0, refunded: 0, returned: 0, totalRefundAmount: 0 });
+      setVendorStats([]);
     } finally {
       setLoading(false);
     }
@@ -218,7 +256,7 @@ export default function OrdersPage() {
         );
         
         // Refresh stats
-        fetchOrders();
+        fetchReturnsOrders();
         
         console.log(`✅ Order ${orderId} status updated to ${newStatus}`);
       } else {
@@ -244,13 +282,29 @@ export default function OrdersPage() {
     
     try {
       setLoading(true);
+      console.log('🔍 Fetching vendor store orders for:', selectedVendor.vendorId, store.id || store._id);
+      
       const response = await orderService.getVendorStoreOrders(selectedVendor.vendorId, store.id || store._id);
+      console.log('📊 Vendor store orders API response:', response);
+      
       if (response.success) {
-        setVendorStoreOrders(response.data || []);
+        // Filter for returns orders only
+        const returnsOrders = (response.data || []).filter(order => 
+          ['cancelled', 'rejected', 'refunded', 'returned'].includes(order.status)
+        );
+        setVendorStoreOrders(returnsOrders);
+        setActiveTab('vendor-orders');
+        console.log('✅ Vendor store returns fetched:', returnsOrders.length, 'orders');
+      } else {
+        console.warn('⚠️ Vendor store orders API returned unsuccessful response:', response);
+        setVendorStoreOrders([]);
         setActiveTab('vendor-orders');
       }
     } catch (error) {
       console.error('❌ Error fetching vendor store orders:', error);
+      console.log('📝 This might be due to API endpoint not existing or insufficient permissions');
+      setVendorStoreOrders([]);
+      setActiveTab('vendor-orders');
     } finally {
       setLoading(false);
     }
@@ -269,11 +323,10 @@ export default function OrdersPage() {
       label: 'Order Status',
       type: 'select',
       options: [
-        { value: 'pending', label: 'Pending' },
-        { value: 'processing', label: 'Processing' },
-        { value: 'shipped', label: 'Shipped' },
-        { value: 'delivered', label: 'Delivered' },
         { value: 'cancelled', label: 'Cancelled' },
+        { value: 'rejected', label: 'Rejected' },
+        { value: 'refunded', label: 'Refunded' },
+        { value: 'returned', label: 'Returned' },
       ]
     },
     {
@@ -359,13 +412,10 @@ export default function OrdersPage() {
         <div className="space-y-1">
           <div className="flex items-center space-x-2">
             <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-              value === 'delivered' ? 'bg-green-100 text-green-800' :
-              value === 'processing' ? 'bg-blue-100 text-blue-800' :
-              value === 'shipped' ? 'bg-indigo-100 text-indigo-800' :
-              value === 'pending' ? 'bg-yellow-100 text-yellow-800' :
-              value === 'accepted' ? 'bg-emerald-100 text-emerald-800' :
+              value === 'cancelled' ? 'bg-red-100 text-red-800' :
               value === 'rejected' ? 'bg-red-100 text-red-800' :
-              value === 'other' ? 'bg-purple-100 text-purple-800' :
+              value === 'refunded' ? 'bg-orange-100 text-orange-800' :
+              value === 'returned' ? 'bg-purple-100 text-purple-800' :
               'bg-gray-100 text-gray-800'
             }`}>
               {value}
@@ -376,14 +426,10 @@ export default function OrdersPage() {
               className="text-xs border border-gray-300 rounded px-1 py-0.5 bg-white"
               onClick={(e) => e.stopPropagation()}
             >
-              <option value="pending">Pending</option>
-              <option value="accepted">Accepted</option>
-              <option value="rejected">Rejected</option>
-              <option value="other">Other</option>
-              <option value="processing">Processing</option>
-              <option value="shipped">Shipped</option>
-              <option value="delivered">Delivered</option>
               <option value="cancelled">Cancelled</option>
+              <option value="rejected">Rejected</option>
+              <option value="refunded">Refunded</option>
+              <option value="returned">Returned</option>
             </select>
           </div>
           <div className="text-xs text-gray-500">
@@ -453,41 +499,35 @@ export default function OrdersPage() {
         <main className="flex-1 overflow-x-hidden overflow-y-auto p-6">
           <div className="mb-6 flex items-center justify-between">
             <div>
-              <h1 className="text-2xl font-bold text-gray-900">Order Management</h1>
-              <p className="text-gray-600 mt-1">Manage all platform orders and vendor statistics</p>
+              <h1 className="text-2xl font-bold text-gray-900">Returns & Refunds Management</h1>
+              <p className="text-gray-600 mt-1">Manage cancelled, rejected, refunded, and returned orders</p>
             </div>
             <div className="flex items-center space-x-3">
               <button
-                onClick={fetchOrders}
+                onClick={fetchReturnsOrders}
                 className="flex items-center space-x-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
               >
-                <TrendingUp className="w-5 h-5" />
+                <RefreshCw className="w-5 h-5" />
                 <span>Refresh</span>
               </button>
               <AdvancedFilter filters={filterConfig} onApply={handleFilter} onClear={handleClearFilters} />
-              <ExportButton data={filteredOrders} filename="orders-export" />
+              <ExportButton data={filteredOrders} filename="returns-export" />
             </div>
           </div>
 
           {/* Stats Cards */}
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6 gap-4 mb-6">
             <StatsCard
-              title="Total Orders"
+              title="Total Returns"
               value={stats.total}
-              icon={ShoppingCart}
+              icon={RotateCcw}
               color="blue"
             />
             <StatsCard
-              title="Pending"
-              value={stats.pending}
-              icon={Package}
-              color="yellow"
-            />
-            <StatsCard
-              title="Accepted"
-              value={stats.accepted}
-              icon={CheckCircle}
-              color="emerald"
+              title="Cancelled"
+              value={stats.cancelled}
+              icon={XCircle}
+              color="red"
             />
             <StatsCard
               title="Rejected"
@@ -496,28 +536,22 @@ export default function OrdersPage() {
               color="red"
             />
             <StatsCard
-              title="Other"
-              value={stats.other}
-              icon={AlertCircle}
-              color="purple"
-            />
-            <StatsCard
-              title="Processing"
-              value={stats.processing}
-              icon={Truck}
-              color="indigo"
-            />
-            <StatsCard
-              title="Delivered"
-              value={stats.delivered}
-              icon={CheckCircle}
-              color="green"
-            />
-            <StatsCard
-              title="Total Revenue"
-              value={`$${stats.revenue.toFixed(2)}`}
+              title="Refunded"
+              value={stats.refunded}
               icon={DollarSign}
+              color="orange"
+            />
+            <StatsCard
+              title="Returned"
+              value={stats.returned}
+              icon={Package}
               color="purple"
+            />
+            <StatsCard
+              title="Total Refund Amount"
+              value={`$${stats.totalRefundAmount.toFixed(2)}`}
+              icon={DollarSign}
+              color="green"
             />
           </div>
 
@@ -526,16 +560,16 @@ export default function OrdersPage() {
             <div className="border-b border-gray-200">
               <nav className="-mb-px flex space-x-8">
                 <button
-                  onClick={() => setActiveTab('all-orders')}
+                  onClick={() => setActiveTab('all-returns')}
                   className={`py-2 px-1 border-b-2 font-medium text-sm ${
-                    activeTab === 'all-orders'
+                    activeTab === 'all-returns'
                       ? 'border-blue-500 text-blue-600'
                       : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
                   }`}
                 >
                   <div className="flex items-center space-x-2">
-                    <ShoppingCart className="w-4 h-4" />
-                    <span>All Orders</span>
+                    <RotateCcw className="w-4 h-4" />
+                    <span>All Returns</span>
                   </div>
                 </button>
                 <button
@@ -571,17 +605,32 @@ export default function OrdersPage() {
           </div>
 
           {/* Tab Content */}
-          {activeTab === 'all-orders' && (
+          {activeTab === 'all-returns' && (
             <div>
-              {/* Orders Table */}
-              <DataTable
-                data={filteredOrders}
-                columns={columns}
-                actions={actions}
-                searchable={true}
-                pagination={true}
-                emptyMessage="No orders found"
-              />
+              {/* Returns Orders Table */}
+              {orders.length === 0 ? (
+                <div className="bg-white rounded-lg shadow p-8 text-center">
+                  <RotateCcw className="mx-auto h-12 w-12 text-gray-400 mb-4" />
+                  <h3 className="text-lg font-medium text-gray-900 mb-2">No Returns/Refunds Found</h3>
+                  <p className="text-gray-600 mb-4">
+                    There are currently no orders with cancelled, rejected, refunded, or returned statuses.
+                  </p>
+                  <div className="text-sm text-gray-500">
+                    <p>• Check if orders exist in the system</p>
+                    <p>• Verify API connectivity to cart service (port 8084)</p>
+                    <p>• Ensure user has proper admin permissions</p>
+                  </div>
+                </div>
+              ) : (
+                <DataTable
+                  data={filteredOrders}
+                  columns={columns}
+                  actions={actions}
+                  searchable={true}
+                  pagination={true}
+                  emptyMessage="No returns/refunds found matching your filters"
+                />
+              )}
             </div>
           )}
 
@@ -590,8 +639,8 @@ export default function OrdersPage() {
               {/* Vendor Statistics Table */}
               <div className="bg-white rounded-lg shadow overflow-hidden">
                 <div className="px-6 py-4 border-b border-gray-200">
-                  <h3 className="text-lg font-medium text-gray-900">Vendor Order Statistics</h3>
-                  <p className="text-sm text-gray-600 mt-1">Performance metrics for each vendor and their stores</p>
+                  <h3 className="text-lg font-medium text-gray-900">Vendor Returns Statistics</h3>
+                  <p className="text-sm text-gray-600 mt-1">Performance metrics for returns and refunds by vendor and store</p>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="min-w-full divide-y divide-gray-200">
@@ -601,34 +650,25 @@ export default function OrdersPage() {
                           Vendor & Store
                         </th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Total Orders
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Pending
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Accepted
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Rejected
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Other
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Processing
-                        </th>
-                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Delivered
+                          Total Returns
                         </th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                           Cancelled
                         </th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Rejected
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Refunded
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                          Returned
+                        </th>
+                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                           Total Items
                         </th>
                         <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          Revenue
+                          Refund Amount
                         </th>
                       </tr>
                     </thead>
@@ -666,13 +706,8 @@ export default function OrdersPage() {
                             </div>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
-                            <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">
-                              {vendor.pendingOrders}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-emerald-100 text-emerald-800">
-                              {vendor.acceptedOrders}
+                            <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
+                              {vendor.cancelledOrders}
                             </span>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
@@ -681,30 +716,20 @@ export default function OrdersPage() {
                             </span>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
+                            <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-orange-100 text-orange-800">
+                              {vendor.refundedOrders}
+                            </span>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
                             <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-purple-100 text-purple-800">
-                              {vendor.otherOrders}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-blue-100 text-blue-800">
-                              {vendor.processingOrders}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
-                              {vendor.deliveredOrders}
-                            </span>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-gray-100 text-gray-800">
-                              {vendor.cancelledOrders}
+                              {vendor.returnedOrders}
                             </span>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                             {vendor.totalItems}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                            ${vendor.totalRevenue.toFixed(2)}
+                            ${vendor.totalRefundAmount.toFixed(2)}
                           </td>
                         </tr>
                       ))}
@@ -715,9 +740,14 @@ export default function OrdersPage() {
                     <div className="text-center py-12">
                       <Users className="mx-auto h-12 w-12 text-gray-400" />
                       <h3 className="mt-2 text-sm font-medium text-gray-900">No vendor data</h3>
-                      <p className="mt-1 text-sm text-gray-500">
-                        No orders found to calculate vendor statistics.
+                      <p className="mt-1 text-sm text-gray-500 mb-4">
+                        No returns/refunds found to calculate vendor statistics.
                       </p>
+                      <div className="text-xs text-gray-400">
+                        <p>• Check if vendor API is accessible (port 8009)</p>
+                        <p>• Verify user has admin/super_admin role permissions</p>
+                        <p>• Vendor names will show as "Unknown Vendor" if API fails</p>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -732,10 +762,10 @@ export default function OrdersPage() {
                 <div className="flex items-center justify-between">
                   <div>
                     <h3 className="text-lg font-medium text-gray-900">
-                      Orders for {selectedVendor.vendorName} - {selectedStore.name}
+                      Returns for {selectedVendor.vendorName} - {selectedStore.name}
                     </h3>
                     <p className="text-sm text-gray-600 mt-1">
-                      {vendorStoreOrders.length} orders found
+                      {vendorStoreOrders.length} returns/refunds found
                     </p>
                   </div>
                   <button
@@ -754,7 +784,7 @@ export default function OrdersPage() {
                 actions={actions}
                 searchable={true}
                 pagination={true}
-                emptyMessage="No orders found for this vendor store"
+                emptyMessage="No returns/refunds found for this vendor store"
               />
             </div>
           )}
@@ -818,7 +848,7 @@ export default function OrdersPage() {
               setShowModal(false);
               setSelectedOrder(null);
             }}
-            title="Order Details"
+            title="Return/Refund Details"
             size="xl"
           >
             {selectedOrder && (
@@ -835,11 +865,11 @@ export default function OrdersPage() {
                       <label className="text-sm font-medium text-gray-600">Status</label>
                       <div className="flex items-center space-x-2">
                         <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                          selectedOrder.status === 'delivered' ? 'bg-green-100 text-green-800' :
-                          selectedOrder.status === 'processing' ? 'bg-blue-100 text-blue-800' :
-                          selectedOrder.status === 'shipped' ? 'bg-indigo-100 text-indigo-800' :
-                          selectedOrder.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
-                          'bg-red-100 text-red-800'
+                          selectedOrder.status === 'cancelled' ? 'bg-red-100 text-red-800' :
+                          selectedOrder.status === 'rejected' ? 'bg-red-100 text-red-800' :
+                          selectedOrder.status === 'refunded' ? 'bg-orange-100 text-orange-800' :
+                          selectedOrder.status === 'returned' ? 'bg-purple-100 text-purple-800' :
+                          'bg-gray-100 text-gray-800'
                         }`}>
                           {selectedOrder.status}
                         </span>
@@ -1026,4 +1056,3 @@ export default function OrdersPage() {
     </div>
   );
 }
-

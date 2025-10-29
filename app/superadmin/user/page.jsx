@@ -138,7 +138,7 @@ const UserManagement = () => {
       if (roleFilter !== 'all') params.append('role', roleFilter);
       
       // Try to get real users from auth service
-      const response = await fetch(`http://localhost:8888/api/auth/users?${params}`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_AUTH_API_URL || 'http://localhost:8888/api/auth'}/users?${params}`, {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -227,7 +227,7 @@ const UserManagement = () => {
       }
 
       // Call the API to update user status
-      const response = await fetch(`http://localhost:8888/api/auth/users/${userId}/status`, {
+      const response = await fetch(`${process.env.NEXT_PUBLIC_AUTH_API_URL || 'http://localhost:8888/api/auth'}/users/${userId}/status`, {
         method: 'PUT',
         headers: {
           'Authorization': `Bearer ${token}`,

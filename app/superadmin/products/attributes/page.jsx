@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../../../contexts/AuthContext';
 import Sidebar from '../../../../components/Sidebar';
 import Header from '../../../../components/Header';
 import { Plus, Edit, Trash2, Eye, Search, Filter } from 'lucide-react';
 import { attributeService } from '../../../../lib/services/attributeService';
+import { productService } from '../../../../lib/services/productService';
 
 export default function AttributeManagementPage() {
   const { user, isLoading, logout } = useAuth();
@@ -42,6 +43,9 @@ export default function AttributeManagementPage() {
   });
   const [newOption, setNewOption] = useState({ value: '', displayName: '' });
   const [categories, setCategories] = useState([]);
+  const [categorySearchTerm, setCategorySearchTerm] = useState('');
+  const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
+  const categoryDropdownRef = useRef(null);
   const [metrics, setMetrics] = useState({
     totalAttributes: 0,
     activeAttributes: 0,
@@ -71,6 +75,21 @@ export default function AttributeManagementPage() {
       fetchCategories();
     }
   }, [user, isLoading, router, searchTerm, statusFilter]);
+
+  // Handle click outside to close dropdown
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (categoryDropdownRef.current && !categoryDropdownRef.current.contains(event.target)) {
+        setShowCategoryDropdown(false);
+        setCategorySearchTerm('');
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
 
   const calculateMetrics = (attributesData) => {
     const totalAttributes = attributesData.length;
@@ -135,19 +154,64 @@ export default function AttributeManagementPage() {
 
   const fetchCategories = async () => {
     try {
-      const response = await fetch('http://localhost:8003/api/categories');
-      const data = await response.json();
+      console.log('🔍 Fetching categories for attribute form...');
+      const response = await productService.getCategories();
       
-      if (data.success) {
-        setCategories(data.data || []);
+      if (response.success) {
+        const categoriesData = response.data || [];
+        setCategories(categoriesData);
+        console.log('✅ Categories fetched successfully:', categoriesData.length, 'categories');
+        console.log('📊 Sample categories:', categoriesData.slice(0, 3));
+      } else {
+        console.error('❌ Failed to fetch categories:', response.message);
+        setCategories([]);
       }
     } catch (error) {
-      console.error('Error fetching categories:', error);
+      console.error('❌ Error fetching categories:', error);
+      setCategories([]);
     }
+  };
+
+  // Filter categories based on search term
+  const filteredCategories = categories.filter(category =>
+    category.name.toLowerCase().includes(categorySearchTerm.toLowerCase())
+  );
+
+  // Handle category selection
+  const handleCategoryToggle = (categoryId) => {
+    setFormData(prev => {
+      const isSelected = prev.categoryIds.includes(categoryId);
+      if (isSelected) {
+        return {
+          ...prev,
+          categoryIds: prev.categoryIds.filter(id => id !== categoryId)
+        };
+      } else {
+        return {
+          ...prev,
+          categoryIds: [...prev.categoryIds, categoryId]
+        };
+      }
+    });
+  };
+
+  // Get selected category names for display
+  const getSelectedCategoryNames = () => {
+    return formData.categoryIds.map(id => {
+      const category = categories.find(cat => cat._id === id);
+      return category ? category.name : '';
+    }).filter(name => name).join(', ');
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    
+    // Validate that at least one category is selected
+    if (formData.categoryIds.length === 0) {
+      alert('Please select at least one category for this attribute');
+      return;
+    }
+    
     try {
       const submitData = {
         ...formData,
@@ -646,6 +710,101 @@ export default function AttributeManagementPage() {
                       min="0"
                     />
                   </div>
+                </div>
+
+                {/* Category Selection - Searchable Multi-Select */}
+                <div className="relative" ref={categoryDropdownRef}>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Categories *</label>
+                  
+                  {/* Selected Categories Display */}
+                  <div 
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 cursor-pointer bg-white"
+                    onClick={() => setShowCategoryDropdown(!showCategoryDropdown)}
+                  >
+                    {formData.categoryIds.length === 0 ? (
+                      <span className="text-gray-500">Select categories...</span>
+                    ) : (
+                      <div className="flex flex-wrap gap-1">
+                        {formData.categoryIds.map(categoryId => {
+                          const category = categories.find(cat => cat._id === categoryId);
+                          return category ? (
+                            <span 
+                              key={categoryId}
+                              className="inline-flex items-center px-2 py-1 rounded-md text-xs font-medium bg-blue-100 text-blue-800"
+                            >
+                              {category.name}
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleCategoryToggle(categoryId);
+                                }}
+                                className="ml-1 text-blue-600 hover:text-blue-800"
+                              >
+                                ×
+                              </button>
+                            </span>
+                          ) : null;
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Dropdown Arrow */}
+                  <div className="absolute right-3 top-8 pointer-events-none">
+                    <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                    </svg>
+                  </div>
+
+                  {/* Dropdown Menu */}
+                  {showCategoryDropdown && (
+                    <div className="absolute z-50 w-full mt-1 bg-white border border-gray-300 rounded-lg shadow-lg max-h-60 overflow-hidden">
+                      {/* Search Input */}
+                      <div className="p-2 border-b border-gray-200">
+                        <input
+                          type="text"
+                          placeholder="Search categories..."
+                          value={categorySearchTerm}
+                          onChange={(e) => setCategorySearchTerm(e.target.value)}
+                          className="w-full px-3 py-2 text-sm border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          autoFocus
+                        />
+                      </div>
+
+                      {/* Categories List */}
+                      <div className="max-h-48 overflow-y-auto">
+                        {filteredCategories.length === 0 ? (
+                          <div className="p-3 text-sm text-gray-500 text-center">
+                            {categorySearchTerm ? 'No categories found' : 'No categories available'}
+                          </div>
+                        ) : (
+                          filteredCategories.map((category) => (
+                            <div
+                              key={category._id}
+                              className="flex items-center px-3 py-2 hover:bg-gray-50 cursor-pointer"
+                              onClick={() => handleCategoryToggle(category._id)}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={formData.categoryIds.includes(category._id)}
+                                onChange={() => {}} // Handled by parent onClick
+                                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                              />
+                              <span className="ml-2 text-sm text-gray-700">
+                                {category.name} {category.parent && `(${category.parent.name})`}
+                              </span>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Validation Message */}
+                  {formData.categoryIds.length === 0 && (
+                    <p className="text-xs text-red-500 mt-1">Please select at least one category</p>
+                  )}
                 </div>
 
                 {/* Options for select/multiselect */}

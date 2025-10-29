@@ -20,7 +20,7 @@ const SystemHealth = () => {
       setIsLoading(true);
       
       // Fetch real system health data from admin API
-      const response = await fetch('http://localhost:8009/api/health/services');
+      const response = await fetch(`${process.env.NEXT_PUBLIC_ADMIN_API_URL || 'http://localhost:8009/api'}/health/services`);
       
       if (!response.ok) {
         throw new Error(`HTTP error! status: ${response.status}`);

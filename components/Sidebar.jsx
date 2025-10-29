@@ -24,6 +24,7 @@ import {
   Star,
   FileSpreadsheet,
   Bell,
+  Activity,
   Shield,
   Globe,
   LifeBuoy,
@@ -190,7 +191,6 @@ const Sidebar = ({ isOpen, onToggle, userType = 'superadmin', onLogout }) => {
         { label: 'All Orders', href: '/superadmin/orders' },
         { label: 'Pending Orders', href: '/superadmin/orders/pending' },
         { label: 'Returns & Refunds', href: '/superadmin/orders/returns' },
-        { label: 'Disputes', href: '/superadmin/orders/disputes' },
       ]
     },
     { 
@@ -262,6 +262,11 @@ const Sidebar = ({ isOpen, onToggle, userType = 'superadmin', onLogout }) => {
       icon: Bell, 
       label: 'Notifications', 
       href: '/superadmin/notifications' 
+    },
+    { 
+      icon: Activity, 
+      label: 'Marketplace Activity', 
+      href: '/superadmin/activity' 
     },
     { 
       icon: LifeBuoy, 

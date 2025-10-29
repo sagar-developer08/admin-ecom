@@ -24,7 +24,7 @@ export const MetricsProvider = ({ children }) => {
       setLoading(true);
       setError(null);
       
-      console.log('🔍 Fetching marketplace metrics...');
+      console.log('🔍 Fetching marketplace metrics from individual endpoints...');
       
       // Get token from localStorage (simple approach)
       let accessToken = null;
@@ -41,7 +41,7 @@ export const MetricsProvider = ({ children }) => {
         }
       }
       
-      // Fetch real metrics data from admin API with authentication
+      // Fetch individual metrics in parallel for better performance
       const headers = {
         'Content-Type': 'application/json',
       };
@@ -49,77 +49,140 @@ export const MetricsProvider = ({ children }) => {
       // Add Authorization header if token exists
       if (accessToken) {
         headers['Authorization'] = `Bearer ${accessToken}`;
+        console.log('✅ [Metrics] Token found, length:', accessToken.length);
+      } else {
+        console.warn('⚠️ [Metrics] No access token found in localStorage');
       }
       
-      const response = await fetch('http://localhost:8009/api/metrics/marketplace?period=all', {
-        headers,
-        credentials: 'include', // Include cookies in the request
+      // New API endpoints - different services
+      const cartServiceUrl = process.env.NEXT_PUBLIC_CART_API_URL || 'http://localhost:8084/api';
+      // For metrics endpoints, use base URL without /auth suffix
+      const authServiceUrl = (process.env.NEXT_PUBLIC_AUTH_API_URL || 'http://localhost:8888/api/auth').replace(/\/api\/auth$/, '/api');
+      const productServiceUrl = process.env.NEXT_PUBLIC_PRODUCT_API_URL || 'http://localhost:8082/api';
+      
+      console.log('🔗 [Metrics] Calling services:', {
+        cart: cartServiceUrl,
+        auth: authServiceUrl,
+        product: productServiceUrl
       });
       
-      if (!response.ok) {
-        if (response.status === 401) {
-          throw new Error('Authentication required. Please log in again.');
-        }
-        throw new Error(`HTTP error! status: ${response.status}`);
+      // Call individual endpoints from new services in parallel
+      const [revenueRes, ordersRes, usersRes, vendorsRes, productsRes, paymentRes] = await Promise.all([
+        fetch(`${cartServiceUrl}/metrics/revenue?period=all`, { headers, credentials: 'include' }),
+        fetch(`${cartServiceUrl}/metrics/orders?period=all`, { headers, credentials: 'include' }),
+        fetch(`${authServiceUrl}/metrics/new-users?period=all`, { headers, credentials: 'include' }),
+        fetch(`${authServiceUrl}/metrics/new-vendors?period=all`, { headers, credentials: 'include' }),
+        fetch(`${productServiceUrl}/metrics/total-products?period=all`, { headers, credentials: 'include' }),
+        fetch(`${cartServiceUrl}/metrics/payment-success-rate?period=all`, { headers, credentials: 'include' })
+      ]);
+
+      // Parse all responses
+      const [revenueData, ordersData, usersData, vendorsData, productsData, paymentData] = await Promise.all([
+        revenueRes.json(),
+        ordersRes.json(),
+        usersRes.json(),
+        vendorsRes.json(),
+        productsRes.json(),
+        paymentRes.json()
+      ]);
+
+      // Check for errors
+      const responses = [revenueRes, ordersRes, usersRes, vendorsRes, productsRes, paymentRes];
+      const failedResponses = responses.filter(res => !res.ok);
+      
+      if (failedResponses.length > 0) {
+        throw new Error(`Some metrics failed to load: ${failedResponses.map(r => r.status).join(', ')}`);
       }
+
+      // Extract data from new API responses
+      const metricsData = {
+        totalRevenue: revenueData.data?.totalRevenue || 0,
+        revenueGrowth: revenueData.data?.growthPercentage || 0,
+        revenueDirection: revenueData.data?.growthDirection || 'up',
+        revenuePeriod: revenueData.data?.period || 'all',
+        
+        totalOrders: ordersData.data?.totalOrders || 0,
+        ordersGrowth: ordersData.data?.growthPercentage || 0,
+        ordersDirection: ordersData.data?.growthDirection || 'up',
+        ordersPeriod: ordersData.data?.period || 'all',
+        
+        newUsers: usersData.data?.newUsers || 0,
+        usersGrowth: usersData.data?.growthPercentage || 0,
+        usersDirection: usersData.data?.growthDirection || 'up',
+        usersPeriod: usersData.data?.period || 'all',
+        
+        newVendors: vendorsData.data?.newVendors || 0,
+        vendorsGrowth: vendorsData.data?.growthPercentage || 0,
+        vendorsDirection: vendorsData.data?.growthDirection || 'up',
+        vendorsPeriod: vendorsData.data?.period || 'all',
+        
+        totalProducts: productsData.data?.totalProducts || 0,
+        productsGrowth: productsData.data?.growthPercentage || 0,
+        productsDirection: productsData.data?.growthDirection || 'up',
+        productsPeriod: productsData.data?.period || 'all',
+        
+        paymentSuccessRate: paymentData.data?.successRate || 0,
+        paymentPeriod: paymentData.data?.period || 'all',
+        
+        activeCampaigns: 12, // Static for now
+        supportTickets: 8 // Static for now
+      };
       
-      const result = await response.json();
-      
-      if (!result.success) {
-        throw new Error(result.message || 'Failed to fetch marketplace metrics');
-      }
-      
-      const metricsData = result.data;
+      // Helper function to format growth percentage
+      const formatGrowth = (value, direction) => {
+        const sign = direction === 'up' ? '+' : '-';
+        return `${sign}${Math.abs(value).toFixed(1)}%`;
+      };
       
       // Transform the data to match the expected format
       const transformedMetrics = {
         revenue: {
           total: metricsData.totalRevenue,
-          period: 'All time',
-          trend: 'up',
-          trendValue: '+12.5%' // This would come from comparison with previous period
+          period: metricsData.revenuePeriod === 'all' ? 'All time' : metricsData.revenuePeriod,
+          trend: metricsData.revenueDirection,
+          trendValue: formatGrowth(metricsData.revenueGrowth, metricsData.revenueDirection)
         },
         orders: {
           total: metricsData.totalOrders,
-          period: 'All time',
-          trend: 'up',
-          trendValue: '+8.3%'
+          period: metricsData.ordersPeriod === 'all' ? 'All time' : metricsData.ordersPeriod,
+          trend: metricsData.ordersDirection,
+          trendValue: formatGrowth(metricsData.ordersGrowth, metricsData.ordersDirection)
         },
         campaigns: {
           active: metricsData.activeCampaigns,
           period: 'Running now',
           trend: 'up',
-          trendValue: '+2'
+          trendValue: '+0' // Static for now
         },
         paymentSuccess: {
           rate: metricsData.paymentSuccessRate,
-          period: 'Last 24 hours',
+          period: metricsData.paymentPeriod === 'all' ? 'All time' : 'Last 24 hours',
           trend: 'up',
-          trendValue: '+0.3%'
+          trendValue: '+0%' // Payment success rate doesn't have growth comparison yet
         },
         users: {
           new: metricsData.newUsers,
-          period: 'All time',
-          trend: 'up',
-          trendValue: '+15.2%'
+          period: metricsData.usersPeriod === 'all' ? 'All time' : metricsData.usersPeriod,
+          trend: metricsData.usersDirection,
+          trendValue: formatGrowth(metricsData.usersGrowth, metricsData.usersDirection)
         },
         vendors: {
           new: metricsData.newVendors,
-          period: 'All time',
-          trend: 'up',
-          trendValue: '+7.8%'
+          period: metricsData.vendorsPeriod === 'all' ? 'All time' : metricsData.vendorsPeriod,
+          trend: metricsData.vendorsDirection,
+          trendValue: formatGrowth(metricsData.vendorsGrowth, metricsData.vendorsDirection)
         },
         products: {
           total: metricsData.totalProducts,
-          period: 'Active products',
-          trend: 'up',
-          trendValue: '+5.2%'
+          period: metricsData.productsPeriod === 'all' ? 'Active products' : 'Active products',
+          trend: metricsData.productsDirection,
+          trendValue: formatGrowth(metricsData.productsGrowth, metricsData.productsDirection)
         },
         supportTickets: {
           open: metricsData.supportTickets,
           period: 'Open tickets',
           trend: 'down',
-          trendValue: '-12%'
+          trendValue: '+0%' // Static for now
         }
       };
       

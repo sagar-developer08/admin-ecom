@@ -44,7 +44,7 @@ export default function VendorsPage() {
   const fetchVendors = async () => {
     try {
       setLoading(true);
-      const response = await vendorService.getAllVendors();
+      const response = await vendorService.getAllVendors({ status: 'active' });
       console.log('🔍 [Frontend] fetchVendors response:', response);
       console.log('🔍 [Frontend] vendors data:', response.data);
       
@@ -308,40 +308,34 @@ export default function VendorsPage() {
         <main className="flex-1 overflow-x-hidden overflow-y-auto p-6">
           <div className="mb-6">
             <h1 className="text-2xl font-bold text-gray-900">Vendor Management</h1>
-            <p className="text-gray-600 mt-1">Manage and monitor all vendors</p>
+            <p className="text-gray-600 mt-1">Manage and monitor active vendors</p>
           </div>
 
           {/* Stats Cards */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-6">
             <StatsCard
-              title="Total Vendors"
+              title="Active Vendors"
               value={stats.total}
               icon={Store}
               color="blue"
             />
             <StatsCard
-              title="Active Vendors"
-              value={stats.active}
+              title="Verified Vendors"
+              value={stats.verified}
               icon={CheckCircle}
               color="green"
             />
             <StatsCard
-              title="Verified Vendors"
-              value={stats.verified}
+              title="Pending Approval"
+              value={stats.pending}
               icon={DollarSign}
               color="blue"
             />
             <StatsCard
-              title="Pending Approval"
-              value={stats.pending}
-              icon={Users}
-              color="yellow"
-            />
-            <StatsCard
               title="Suspended"
               value={stats.suspended}
-              icon={XCircle}
-              color="red"
+              icon={Users}
+              color="yellow"
             />
           </div>
 

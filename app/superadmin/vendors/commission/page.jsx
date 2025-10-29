@@ -31,7 +31,7 @@ export default function CommissionSettings() {
   const [loading, setLoading] = useState(false);
   const [vendors, setVendors] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
-  const [filterStatus, setFilterStatus] = useState('verified');
+  const [filterStatus, setFilterStatus] = useState('all');
   const [showCommissionModal, setShowCommissionModal] = useState(false);
   const [selectedVendor, setSelectedVendor] = useState(null);
   const [commissionRate, setCommissionRate] = useState('');
@@ -81,14 +81,15 @@ export default function CommissionSettings() {
         console.log('Failed to load global settings:', globalResponse);
       }
 
-      // Load all vendors for commission setting
-      const vendorResponse = await vendorService.getAllVendors({ search: searchTerm });
+      // Load vendors for commission setting - use commission-specific endpoint
+      const vendorResponse = await commissionService.getAllVendorCommissionSettings({ search: searchTerm });
       if (vendorResponse.success) {
-        // The backend now returns consolidated data with isVerified and commissionRate from CommissionSettings model
+        // The commission endpoint returns only active vendors with commission data and verification status
         const transformedVendors = vendorResponse.data.map(vendor => ({
           ...vendor,
-          // Use isVerified from CommissionSettings model (already included in response)
-          verified: vendor.isVerified || false, // Backwards compatibility
+          // Ensure both verification fields are consistent
+          verified: vendor.verified || false,
+          isVerified: vendor.verified || false,
           businessName: vendor.businessName || 'N/A'
         }));
         setVendors(transformedVendors);
@@ -238,7 +239,7 @@ export default function CommissionSettings() {
                 <nav className="-mb-px flex space-x-8">
                   {[
                     { id: 'global', label: 'Global Settings', icon: Settings },
-                    { id: 'vendors', label: 'Vendor Commissions (Verified Only)', icon: Users }
+                    { id: 'vendors', label: 'Vendor Commissions', icon: Users }
                   ].map((tab) => {
                     const Icon = tab.icon;
                     return (
@@ -364,12 +365,12 @@ export default function CommissionSettings() {
                     <div>
                       <h2 className="text-xl font-semibold text-gray-900">Vendor Commission Rates</h2>
                       <p className="text-sm text-gray-600 mt-1">
-                        Set commission rates for vendors. Only verified vendors can have custom commission rates.
+                        Set commission rates for active vendors. Only verified vendors can have custom commission rates.
                         <a 
                           href="/superadmin/vendors/verification" 
                           className="text-blue-600 hover:text-blue-800 ml-1 underline"
                         >
-                          Verify vendors here
+                          Manage vendor verification here
                         </a>
                       </p>
                     </div>
@@ -389,10 +390,9 @@ export default function CommissionSettings() {
                         onChange={(e) => setFilterStatus(e.target.value)}
                         className="px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                       >
-                        <option value="all">All Vendors</option>
+                        <option value="all">All Active Vendors</option>
                         <option value="verified">Verified Only</option>
-                        <option value="pending">Pending Verification</option>
-                        <option value="active">Active Only</option>
+                        <option value="custom">Custom Commission</option>
                       </select>
                       <button
                         onClick={loadCommissionData}
@@ -436,9 +436,8 @@ export default function CommissionSettings() {
                                                vendor.businessName?.toLowerCase().includes(searchTerm.toLowerCase());
                           
                           const matchesFilter = filterStatus === 'all' || 
-                                               (filterStatus === 'verified' && vendor.verified) ||
-                                               (filterStatus === 'pending' && !vendor.verified && vendor.status === 'pending') ||
-                                               (filterStatus === 'active' && vendor.status === 'active');
+                                               (filterStatus === 'verified' && (vendor.verified || vendor.isVerified)) ||
+                                               (filterStatus === 'custom' && vendor.hasCustomCommission);
                           
                           return matchesSearch && matchesFilter;
                         })

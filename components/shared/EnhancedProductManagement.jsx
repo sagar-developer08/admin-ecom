@@ -80,10 +80,8 @@ export default function EnhancedProductManagement() {
     try {
       setLoading(true);
       console.log('Starting fetchInitialData...');
-      await fetchVendors();
-      console.log('Vendors fetched, now fetching stats...');
-      await fetchStats();
-      console.log('Stats fetched, fetchInitialData complete');
+      await fetchVendors(); // This will now call fetchStatsWithVendors internally
+      console.log('Vendors and stats fetched, fetchInitialData complete');
     } finally {
       setLoading(false);
     }
@@ -92,59 +90,73 @@ export default function EnhancedProductManagement() {
   const fetchVendors = async () => {
     try {
       console.log('Fetching vendors...');
-      const response = await vendorService.getAllVendors({ limit: 50 });
-      console.log('Vendors response:', response);
+      const response = await vendorService.getAllVendors({ status: 'active', limit: 50 });
+      console.log('🔍 [Products Page] Vendors API response:', response);
+      console.log('🔍 [Products Page] Response structure:', {
+        success: response.success,
+        dataType: Array.isArray(response.data) ? 'array' : typeof response.data,
+        dataLength: response.data?.length,
+        hasVendors: !!response.vendors,
+        vendorsLength: response.vendors?.length
+      });
       
       if (response.success) {
         // Ensure we always have an array
         const vendors = Array.isArray(response.data) ? response.data : 
                        Array.isArray(response.vendors) ? response.vendors : 
                        Array.isArray(response) ? response : [];
-        console.log('Processed vendors:', vendors);
+        console.log('🔍 [Products Page] Processed vendors count:', vendors.length);
+        console.log('🔍 [Products Page] Processed vendors:', vendors);
+        console.log('🔍 [Products Page] Sample vendor IDs:', vendors.slice(0, 3).map(v => ({ id: v.id, _id: v._id, email: v.email })));
         
-        // Fetch product counts for each vendor efficiently
-        const vendorsWithCounts = await Promise.all(
-          vendors.map(async (vendor) => {
-            try {
-              // Fetch with limit 1 to get pagination info without loading all products
-              const vendorId = vendor.id || vendor._id;
-              console.log(`Fetching products for vendor ${vendorId} (${vendor.email})`);
-              const productResponse = await vendorService.getVendorProducts(vendorId, { limit: 1, page: 1 });
-              console.log(`Product response for vendor ${vendorId}:`, productResponse);
-              console.log(`🔍 DEBUG: Vendor ${vendorId} pagination total:`, productResponse?.data?.pagination?.total);
-              let productCount = 0;
-              
-              if (productResponse.success) {
-                // Use pagination total if available, otherwise count the products
-                if (productResponse.data?.pagination?.total) {
-                  productCount = productResponse.data.pagination.total;
-                } else {
-                  // Handle nested data structure: response.data.products
-                  const products = Array.isArray(productResponse.data?.products) ? productResponse.data.products :
-                                 Array.isArray(productResponse.data) ? productResponse.data : 
-                                 Array.isArray(productResponse.products) ? productResponse.products : 
-                                 Array.isArray(productResponse) ? productResponse : [];
-                  productCount = products.length;
-                }
+        // Get all products once and count by vendor (more efficient)
+        let vendorProductCounts = {};
+        try {
+          console.log('🔍 Fetching all products to count by vendor...');
+          const allProductsResponse = await productService.getAllProducts({ limit: 1000 }); // Get all products
+          
+          if (allProductsResponse.success) {
+            const products = Array.isArray(allProductsResponse.data?.products) ? allProductsResponse.data.products :
+                           Array.isArray(allProductsResponse.data) ? allProductsResponse.data : 
+                           Array.isArray(allProductsResponse.products) ? allProductsResponse.products : 
+                           Array.isArray(allProductsResponse) ? allProductsResponse : [];
+            
+            console.log(`📊 Total products fetched: ${products.length}`);
+            
+            // Count products by vendor_id (convert to string for comparison)
+            vendorProductCounts = products.reduce((counts, product) => {
+              const vendorId = product.vendor_id ? product.vendor_id.toString() : null;
+              if (vendorId) {
+                counts[vendorId] = (counts[vendorId] || 0) + 1;
               }
-              
-              console.log(`Vendor ${vendorId} has ${productCount} products`);
-              return {
-                ...vendor,
-                product_count: productCount
-              };
-            } catch (error) {
-              console.error(`Error fetching product count for vendor ${vendorId}:`, error);
-              console.error('Product API might not be running at localhost:8080');
-              return {
-                ...vendor,
-                product_count: 0
-              };
-            }
-          })
-        );
+              return counts;
+            }, {});
+            
+            console.log('📊 Vendor product counts:', vendorProductCounts);
+            console.log('📊 Sample vendor IDs from products:', Object.keys(vendorProductCounts).slice(0, 5));
+          }
+        } catch (error) {
+          console.error('Error fetching all products for vendor counts:', error);
+        }
+
+        // Map vendors with their product counts
+        const vendorsWithCounts = vendors.map((vendor) => {
+          const vendorId = (vendor.id || vendor._id)?.toString();
+          const productCount = vendorProductCounts[vendorId] || 0;
+          
+          console.log(`Vendor ${vendorId} (${vendor.email}) has ${productCount} products`);
+          return {
+            ...vendor,
+            product_count: productCount
+          };
+        });
         
+        console.log('🔍 [Products Page] Final vendors with counts:', vendorsWithCounts.length);
         setVendors(vendorsWithCounts);
+        
+        // Update stats after vendors are loaded to ensure accurate count
+        console.log('🔄 Updating stats after vendors loaded...');
+        await fetchStatsWithVendors(vendorsWithCounts);
       } else {
         console.log('Vendors response not successful:', response);
         setVendors([]);
@@ -156,62 +168,40 @@ export default function EnhancedProductManagement() {
       // If vendors API fails (e.g., authentication), set empty array
       // The stats will use the fallback vendor count from products
       setVendors([]);
+      await fetchStatsWithVendors([]);
     }
   };
 
-  const fetchStats = async () => {
+  const fetchStatsWithVendors = async (vendorsData) => {
     try {
-      console.log('Fetching stats...');
-      const [allProductsRes, pendingRes, approvedActiveRes, rejectedRes] = await Promise.all([
-        productService.getAllProducts({ limit: 50 }),
+      console.log('Fetching stats with vendors:', vendorsData?.length);
+      
+      // Get stats with approval_status filter to get proper counts from database
+      const [allProductsRes, pendingRes, approvedRes, rejectedRes] = await Promise.all([
+        productService.getAllProducts({ approval_status: 'approved', limit: 1 }), // Get approved products count
         productService.getAllProducts({ approval_status: 'pending', limit: 1 }),
-        productService.getAllProducts({ approval_status: 'approved', status: 'active', limit: 1 }),
+        productService.getAllProducts({ approval_status: 'approved', limit: 1 }),
         productService.getAllProducts({ approval_status: 'rejected', limit: 1 })
       ]);
 
-      console.log('Stats responses:', { allProductsRes, pendingRes, approvedActiveRes, rejectedRes });
+      console.log('Stats responses:', { allProductsRes, pendingRes, approvedRes, rejectedRes });
 
-      const totalProducts = allProductsRes?.stats?.total || allProductsRes?.data?.pagination?.total || 0;
-      const pendingProducts = pendingRes?.stats?.pending || pendingRes?.pagination?.total || 0;
-      const approvedProducts = approvedActiveRes?.data?.pagination?.total || approvedActiveRes?.pagination?.total || 0;
-      const rejectedProducts = rejectedRes?.stats?.rejected || rejectedRes?.pagination?.total || 0;
+      // Use stats from the API response which contains actual database counts
+      const totalProducts = allProductsRes?.stats?.total || 0;
+      const pendingProducts = pendingRes?.stats?.pending || 0;
+      const approvedProducts = approvedRes?.stats?.approved || 0;
+      const rejectedProducts = rejectedRes?.stats?.rejected || 0;
 
-      // Get unique vendor count from products data
-      let uniqueVendors = 0;
-      if (allProductsRes?.data?.products && Array.isArray(allProductsRes.data.products)) {
-        const vendorIds = new Set();
-        allProductsRes.data.products.forEach(product => {
-          if (product.vendor_id) {
-            vendorIds.add(product.vendor_id);
-          }
-        });
-        uniqueVendors = vendorIds.size;
-      }
-
-      // DEBUG: Log vendor distribution from the first 50 products
-      if (allProductsRes?.data?.products && Array.isArray(allProductsRes.data.products)) {
-        const vendorDistribution = {};
-        allProductsRes.data.products.forEach(product => {
-          const vendorId = product.vendor_id || 'NO_VENDOR_ID';
-          vendorDistribution[vendorId] = (vendorDistribution[vendorId] || 0) + 1;
-        });
-        console.log('🔍 DEBUG: Vendor distribution in first 50 products:', vendorDistribution);
-        console.log('🔍 DEBUG: Total products from stats:', allProductsRes?.stats?.total);
-        console.log('🔍 DEBUG: Total products from pagination:', allProductsRes?.data?.pagination?.total);
-        console.log('🔍 DEBUG: Using total products:', totalProducts);
-        console.log('🔍 DEBUG: Unique vendors in first 50:', uniqueVendors);
-      }
-
-      console.log('Calculated stats:', { 
+      console.log('Calculated stats with vendors:', { 
         totalProducts, 
         pendingProducts, 
         approvedProducts, 
         rejectedProducts, 
-        totalVendors: uniqueVendors || vendors.length 
+        totalVendors: vendorsData?.length || 0
       });
 
       const newStats = {
-        totalVendors: uniqueVendors || vendors.length,
+        totalVendors: vendorsData?.length || 0, // Use passed vendors count
         totalProducts,
         pendingProducts,
         approvedProducts,
@@ -226,7 +216,60 @@ export default function EnhancedProductManagement() {
       
       // Set fallback stats if product API is not available
       setStats({
-        totalVendors: vendors.length,
+        totalVendors: vendorsData?.length || 0, // Use passed vendors count
+        totalProducts: 0,
+        pendingProducts: 0,
+        approvedProducts: 0,
+        rejectedProducts: 0
+      });
+    }
+  };
+
+  const fetchStats = async () => {
+    try {
+      console.log('Fetching stats...');
+      
+      // Get stats with approval_status filter to get proper counts from database
+      const [allProductsRes, pendingRes, approvedRes, rejectedRes] = await Promise.all([
+        productService.getAllProducts({ approval_status: 'approved', limit: 1 }), // Get approved products count
+        productService.getAllProducts({ approval_status: 'pending', limit: 1 }),
+        productService.getAllProducts({ approval_status: 'approved', limit: 1 }),
+        productService.getAllProducts({ approval_status: 'rejected', limit: 1 })
+      ]);
+
+      console.log('Stats responses:', { allProductsRes, pendingRes, approvedRes, rejectedRes });
+
+      // Use stats from the API response which contains actual database counts
+      const totalProducts = allProductsRes?.stats?.total || 0;
+      const pendingProducts = pendingRes?.stats?.pending || 0;
+      const approvedProducts = approvedRes?.stats?.approved || 0;
+      const rejectedProducts = rejectedRes?.stats?.rejected || 0;
+
+      console.log('Calculated stats:', { 
+        totalProducts, 
+        pendingProducts, 
+        approvedProducts, 
+        rejectedProducts, 
+        totalVendors: vendors.length
+      });
+
+      const newStats = {
+        totalVendors: vendors.length, // Use actual vendors count from vendors API
+        totalProducts,
+        pendingProducts,
+        approvedProducts,
+        rejectedProducts
+      };
+
+      console.log('Setting stats to:', newStats);
+      setStats(newStats);
+    } catch (error) {
+      console.error('Error fetching stats:', error);
+      console.error('Product API might not be running at localhost:8080');
+      
+      // Set fallback stats if product API is not available
+      setStats({
+        totalVendors: vendors.length, // Use actual vendors count
         totalProducts: 0,
         pendingProducts: 0,
         approvedProducts: 0,
@@ -426,7 +469,7 @@ export default function EnhancedProductManagement() {
           // Refresh all products to update pagination
           fetchAllProducts(allProductsPagination.page);
         }
-        fetchStats();
+        fetchStatsWithVendors(vendors);
       }
     } catch (error) {
       console.error('Error approving product:', error);
@@ -462,7 +505,7 @@ export default function EnhancedProductManagement() {
         setShowRejectModal(false);
         setSelectedProduct(null);
         setRejectionReason('');
-        fetchStats();
+        fetchStatsWithVendors(vendors);
       }
     } catch (error) {
       console.error('Error rejecting product:', error);
@@ -494,7 +537,7 @@ export default function EnhancedProductManagement() {
           fetchAllProducts(allProductsPagination.page);
         }
         setSelectedProducts([]);
-        fetchStats();
+        fetchStatsWithVendors(vendors);
       }
     } catch (error) {
       console.error('Error bulk approving products:', error);
@@ -557,12 +600,12 @@ export default function EnhancedProductManagement() {
         </div>
         <button
           onClick={() => {
-            console.log('Manual stats refresh triggered');
-            fetchStats();
+            console.log('Manual refresh triggered');
+            fetchInitialData();
           }}
           className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
         >
-          Refresh Stats
+          Refresh Data
         </button>
       </div>
 
@@ -572,7 +615,7 @@ export default function EnhancedProductManagement() {
           <div className="flex items-center">
             <Users className="h-8 w-8 text-blue-600" />
             <div className="ml-3">
-              <div className="text-sm text-gray-600">Total Vendors</div>
+              <div className="text-sm text-gray-600">Active Vendors</div>
               <div className="text-2xl font-bold text-gray-900">{stats.totalVendors}</div>
             </div>
           </div>
@@ -663,8 +706,8 @@ export default function EnhancedProductManagement() {
       {activeTab === 'vendors' && (
         <div className="bg-white rounded-lg shadow">
           <div className="px-6 py-4 border-b border-gray-200">
-            <h3 className="text-lg font-medium text-gray-900">Vendor List</h3>
-            <p className="text-sm text-gray-600">Click on a vendor to view their products</p>
+            <h3 className="text-lg font-medium text-gray-900">Active Vendors</h3>
+            <p className="text-sm text-gray-600">Click on a vendor to view their products. Only active vendors are shown.</p>
           </div>
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
@@ -714,7 +757,7 @@ export default function EnhancedProductManagement() {
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="text-sm text-gray-900">{vendor.business_name || 'N/A'}</div>
+                      <div className="text-sm text-gray-900">{vendor.business_name || ''}</div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="text-sm text-gray-900">{vendor.email}</div>

@@ -22,6 +22,8 @@ const StatsCard = ({
     red: 'bg-red-500',
     purple: 'bg-purple-500',
     indigo: 'bg-indigo-500',
+    orange: 'bg-orange-500',
+    emerald: 'bg-emerald-500',
   };
 
   const getTrendIcon = () => {

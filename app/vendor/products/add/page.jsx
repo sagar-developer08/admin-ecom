@@ -622,7 +622,7 @@ export default function AddProductPage() {
       formData.append('quality', '85');
       
       uploadPromises.push(
-        fetch('http://localhost:5005/api/upload/image', {
+        fetch(`${process.env.NEXT_PUBLIC_MEDIA_API_URL || 'http://localhost:5005/api'}/upload/image`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${tokens?.accessToken}`

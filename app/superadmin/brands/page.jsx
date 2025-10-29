@@ -74,16 +74,39 @@ export default function BrandsPage() {
   const fetchBrands = async (page = pagination.page, limit = pagination.limit, search = searchTerm) => {
     try {
       setLoading(true);
+      console.log('🔍 Fetching brands with params:', { page, limit, search });
+      
       const params = {
         page,
         limit,
         ...(search && { search })
       };
+      
+      console.log('📡 Calling productService.getBrands with params:', params);
       const response = await productService.getBrands(params);
-      setBrands(response.data?.brands || []);
-      setPagination(response.data?.pagination || { page: 1, limit: 10, total: 0, pages: 0 });
+      
+      console.log('📊 Brands API response:', response);
+      
+      if (response.success) {
+        // Handle the nested data structure from the API
+        const brandsData = response.data?.data?.brands || response.data?.brands || response.data || [];
+        const paginationData = response.data?.data?.pagination || response.data?.pagination || { page: 1, limit: 10, total: 0, pages: 0 };
+        
+        console.log('✅ Brands fetched successfully:', brandsData.length, 'brands');
+        console.log('📊 Brands data:', brandsData);
+        console.log('📊 Pagination data:', paginationData);
+        
+        setBrands(brandsData);
+        setPagination(paginationData);
+      } else {
+        console.error('❌ Failed to fetch brands:', response.message);
+        setBrands([]);
+        setPagination({ page: 1, limit: 10, total: 0, pages: 0 });
+      }
     } catch (error) {
-      console.error('Error fetching brands:', error);
+      console.error('❌ Error fetching brands:', error);
+      setBrands([]);
+      setPagination({ page: 1, limit: 10, total: 0, pages: 0 });
     } finally {
       setLoading(false);
     }

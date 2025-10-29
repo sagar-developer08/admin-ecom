@@ -5,6 +5,7 @@ import MetricCard from './MetricCard';
 import SystemHealth from './SystemHealth';
 import LoadingScreen from './LoadingScreen';
 import ErrorMessage from './ErrorMessage';
+import RecentActivity from './RecentActivity';
 import { useMetrics } from '../contexts/MetricsContext';
 import { useAuth } from '../contexts/AuthContext';
 import { 
@@ -30,6 +31,7 @@ import {
   ArcElement,
 } from 'chart.js';
 import { Bar, Doughnut } from 'react-chartjs-2';
+import LineChart from './shared/LineChart';
 
 ChartJS.register(
   CategoryScale,
@@ -49,6 +51,10 @@ const SuperAdminDashboard = () => {
   const [recentActivities, setRecentActivities] = useState([]);
   const [activitiesLoading, setActivitiesLoading] = useState(false);
   const [trends, setTrends] = useState(null);
+  const [vendorDistribution, setVendorDistribution] = useState([]);
+  const [orderStatistics, setOrderStatistics] = useState([]);
+  const [orderStatsPeriod, setOrderStatsPeriod] = useState('month');
+  const [orderStatsGroupBy, setOrderStatsGroupBy] = useState('day');
   const hasFetchedAdditionalMetrics = useRef(false);
 
   const handleRefresh = async () => {
@@ -66,76 +72,223 @@ const SuperAdminDashboard = () => {
 
   const fetchAdditionalMetrics = async () => {
     try {
-      console.log('Loading additional metrics from admin API...');
+      console.log('Loading additional metrics from new service endpoints...');
       
-      // Fetch real data from the admin API
-      const response = await fetch('http://localhost:8009/api/metrics/marketplace?period=all');
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      // Get token from localStorage
+      let accessToken = null;
+      if (typeof window !== 'undefined') {
+        try {
+          const storedTokens = localStorage.getItem('qliq-admin-tokens');
+          if (storedTokens) {
+            const tokens = JSON.parse(storedTokens);
+            accessToken = tokens.accessToken;
+          }
+        } catch (err) {
+          console.error('Error getting token from localStorage:', err);
+        }
       }
       
-      const result = await response.json();
+      const headers = {
+        'Content-Type': 'application/json',
+      };
       
-      if (!result.success) {
-        throw new Error(result.message || 'Failed to fetch additional metrics');
+      if (accessToken) {
+        headers['Authorization'] = `Bearer ${accessToken}`;
       }
       
-      const metricsData = result.data;
+      // New API endpoints - different services
+      const cartServiceUrl = process.env.NEXT_PUBLIC_CART_API_URL || 'http://localhost:8084/api';
+      // For metrics endpoints, use base URL without /auth suffix
+      const authServiceUrl = (process.env.NEXT_PUBLIC_AUTH_API_URL || 'http://localhost:8888/api/auth').replace(/\/api\/auth$/, '/api');
       
-      // Transform order status distribution data
-      const orderStatusData = metricsData.orderStatusDistribution ? 
-        Object.entries(metricsData.orderStatusDistribution).map(([status, count]) => ({
-          status,
-          count
+      // Fetch all reports in parallel
+      const [summaryRes, trendRes, statusRes, vendorDistRes, orderStatsRes] = await Promise.all([
+        fetch(`${cartServiceUrl}/metrics/order-status-distribution?period=all`, { headers, credentials: 'include' }),
+        fetch(`${authServiceUrl}/metrics/user-role-distribution?period=all`, { headers, credentials: 'include' }),
+        fetch(`${cartServiceUrl}/reports/vendors/status-distribution`, { headers, credentials: 'include' }),
+        fetch(`${cartServiceUrl}/metrics/vendor-distribution?period=all`, { headers, credentials: 'include' }),
+        fetch(`${cartServiceUrl}/metrics/order-statistics?period=${orderStatsPeriod}&groupBy=${orderStatsGroupBy}`, { headers, credentials: 'include' })
+      ]);
+      
+      if (!summaryRes.ok || !trendRes.ok) {
+        throw new Error(`HTTP error! status: ${summaryRes.status}, ${trendRes.status}`);
+      }
+      
+      const [orderStatusResult, userRoleResult, vendorDistResult, orderStatsResult] = await Promise.all([
+        summaryRes.json(),
+        trendRes.json(),
+        vendorDistRes.ok ? vendorDistRes.json() : { success: true, data: { distribution: [] } },
+        orderStatsRes.ok ? orderStatsRes.json() : { success: true, data: { statistics: [] } }
+      ]);
+      
+      if (!orderStatusResult.success || !userRoleResult.success) {
+        throw new Error('Failed to fetch additional metrics');
+      }
+      
+      // Transform order status distribution data from new API format
+      const orderStatusData = orderStatusResult.data?.distribution ? 
+        orderStatusResult.data.distribution.map(item => ({
+          status: item.status,
+          count: item.count
         })) : [];
       
-      // Transform user role distribution data
-      const userRoleData = metricsData.userRoleDistribution ?
-        Object.entries(metricsData.userRoleDistribution).map(([role, count]) => ({
-          role,
-          count
+      // Transform user role distribution data from new API format
+      const userRoleData = userRoleResult.data?.distribution ?
+        userRoleResult.data.distribution.map(item => ({
+          role: item.role,
+          count: item.count
         })) : [];
+
+      // Transform vendor distribution data
+      const vendorDistData = vendorDistResult.data?.distribution || [];
+      
+      // Transform order statistics data
+      const orderStatsData = orderStatsResult.data?.statistics || [];
 
       setOrderStatusDistribution(orderStatusData);
       setUserRoleDistribution(userRoleData);
+      setVendorDistribution(vendorDistData);
+      setOrderStatistics(orderStatsData);
       
-      console.log('Additional metrics loaded successfully from admin API');
+      console.log('Additional metrics loaded successfully from new service endpoints');
       
     } catch (error) {
-      console.error('Failed to load additional metrics from admin API:', error);
+      console.error('Failed to load additional metrics from new service endpoints:', error);
       
       // Fallback to empty arrays if API fails
       setOrderStatusDistribution([]);
       setUserRoleDistribution([]);
+      setVendorDistribution([]);
+      setOrderStatistics([]);
     }
+  };
+
+  const getAuthToken = () => {
+    if (typeof window !== 'undefined') {
+      try {
+        const storedTokens = localStorage.getItem('qliq-admin-tokens');
+        if (storedTokens) {
+          const tokens = JSON.parse(storedTokens);
+          return tokens.accessToken;
+        }
+      } catch (err) {
+        console.error('Error getting token:', err);
+      }
+    }
+    return null;
   };
 
   const fetchRecentActivities = async () => {
     try {
       setActivitiesLoading(true);
-      console.log('Loading recent activities from admin API...');
+      console.log('Loading recent activities...');
       
-      const response = await fetch('http://localhost:8009/api/activities/recent?limit=10&period=day');
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      
-      const result = await response.json();
-      
-      if (!result.success) {
-        throw new Error(result.message || 'Failed to fetch recent activities');
-      }
-      
-      setRecentActivities(result.data.activities || []);
-      console.log('Recent activities loaded successfully from admin API');
-      
+      // Use fallback: Create activities based on available data
+      const fallbackActivities = await createFallbackActivities();
+      setRecentActivities(fallbackActivities);
     } catch (error) {
-      console.error('Failed to load recent activities from admin API:', error);
+      console.error('Failed to load recent activities:', error);
       setRecentActivities([]);
     } finally {
       setActivitiesLoading(false);
+    }
+  };
+
+  const createFallbackActivities = async () => {
+    try {
+      const activities = [];
+      
+      const token = getAuthToken();
+      const headers = {
+        'Content-Type': 'application/json',
+      };
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+
+      const cartServiceUrl = process.env.NEXT_PUBLIC_CART_API_URL || 'http://localhost:8084/api';
+      // For metrics endpoints, use base URL without /auth suffix
+      const authServiceUrl = (process.env.NEXT_PUBLIC_AUTH_API_URL || 'http://localhost:8888/api/auth').replace(/\/api\/auth$/, '/api');
+
+      // Get recent orders from cart service
+      try {
+        const ordersResponse = await fetch(`${cartServiceUrl}/orders/admin/all?limit=10&page=1`, { headers, credentials: 'include' });
+        if (ordersResponse.ok) {
+          const ordersData = await ordersResponse.json();
+          if (ordersData.success && ordersData.data) {
+            const orders = Array.isArray(ordersData.data) ? ordersData.data : ordersData.data.orders || [];
+            orders.slice(0, 5).forEach(order => {
+              activities.push({
+                type: 'order',
+                message: `New order #${order.orderNumber || order._id?.slice(-6)} placed for $${order.totalAmount?.toFixed(2) || '0.00'}`,
+                timestamp: order.createdAt,
+                color: 'green',
+                metadata: {
+                  orderId: order._id,
+                  amount: order.totalAmount
+                }
+              });
+            });
+          }
+        }
+      } catch (error) {
+        console.log('Could not fetch orders for activities:', error);
+      }
+
+      // Get recent users from auth service
+      try {
+        const usersResponse = await fetch(`${authServiceUrl}/users?limit=5&role=user`, { headers, credentials: 'include' });
+        if (usersResponse.ok) {
+          const usersData = await usersResponse.json();
+          if (usersData.success && usersData.users) {
+            usersData.users.forEach(user => {
+              activities.push({
+                type: 'user_registration',
+                message: `New customer ${user.name || user.email} registered`,
+                timestamp: user.createdAt || user.created_at,
+                color: 'blue',
+                metadata: {
+                  userId: user.id || user._id
+                }
+              });
+            });
+          }
+        }
+      } catch (error) {
+        console.log('Could not fetch users for activities:', error);
+      }
+
+      // Get recent vendors from auth service
+      try {
+        const vendorsResponse = await fetch(`${authServiceUrl}/users?limit=3&role=vendor`, { headers, credentials: 'include' });
+        if (vendorsResponse.ok) {
+          const vendorsData = await vendorsResponse.json();
+          if (vendorsData.success && vendorsData.users) {
+            vendorsData.users.forEach(vendor => {
+              activities.push({
+                type: 'vendor',
+                message: `New vendor ${vendor.name || vendor.email} registered`,
+                timestamp: vendor.createdAt || vendor.created_at,
+                color: 'purple',
+                metadata: {
+                  userId: vendor.id || vendor._id
+                }
+              });
+            });
+          }
+        }
+      } catch (error) {
+        console.log('Could not fetch vendors for activities:', error);
+      }
+
+      // Sort by timestamp and limit to 10
+      return activities
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+        .slice(0, 10);
+        
+    } catch (error) {
+      console.error('Error creating fallback activities:', error);
+      return [];
     }
   };
 
@@ -147,6 +300,13 @@ const SuperAdminDashboard = () => {
       fetchRecentActivities();
     }
   }, [metrics, loading]); // Only depend on metrics and loading state
+
+  useEffect(() => {
+    // Refresh order statistics when period or groupBy changes
+    if (metrics && !loading) {
+      fetchAdditionalMetrics();
+    }
+  }, [orderStatsPeriod, orderStatsGroupBy]);
 
   const formatLastUpdated = (timestamp) => {
     if (!timestamp) return 'Never';
@@ -173,19 +333,30 @@ const SuperAdminDashboard = () => {
   };
 
   // Chart configurations
-  const orderStatusColors = [
-    '#ef4444', // red-500 for completed
-    '#f59e0b', // amber-500 for processing  
-    '#10b981', // emerald-500 for shipped
-    '#3b82f6', // blue-500 for pending
-    '#6b7280'  // gray-500 for cancelled
-  ];
+  // Order status colors mapping - colors assigned based on status from model
+  const getOrderStatusColor = (status) => {
+    const statusLower = status?.toLowerCase();
+    const colorMap = {
+      'pending': '#f59e0b',    // orange-500 for pending
+      'rejected': '#ef4444',   // red-500 for rejected
+      'cancelled': '#ef4444',  // red-500 for cancelled
+      'accepted': '#10b981',   // emerald-500 for accepted
+      'processing': '#3b82f6', // blue-500 for processing
+      'shipped': '#8b5cf6',    // violet-500 for shipped
+      'delivered': '#10b981', // emerald-500 for delivered
+      'refunded': '#6b7280',   // gray-500 for refunded
+      'other': '#ec4899'       // pink-500 for other
+    };
+    return colorMap[statusLower] || '#6b7280'; // default to gray if status not found
+  };
 
   const userRoleColors = [
-    '#ef4444', // red-500 for customer
-    '#f59e0b', // amber-500 for vendor
-    '#10b981', // emerald-500 for admin
-    '#8b5cf6'  // violet-500 for super_admin
+    '#3b82f6', // blue-500 for customer/user
+    '#10b981', // emerald-500 for vendor
+    '#8b5cf6', // violet-500 for admin
+    '#f59e0b', // amber-500 for super_admin
+    '#06b6d4', // cyan-500 for other roles
+    '#ec4899'  // pink-500 for additional roles
   ];
 
   const orderStatusChartData = orderStatusDistribution ? {
@@ -193,8 +364,8 @@ const SuperAdminDashboard = () => {
     datasets: [
       {
         data: orderStatusDistribution.map(item => item.count),
-        backgroundColor: orderStatusColors,
-        borderColor: orderStatusColors.map(color => color),
+        backgroundColor: orderStatusDistribution.map(item => getOrderStatusColor(item.status)),
+        borderColor: orderStatusDistribution.map(item => getOrderStatusColor(item.status)),
         borderWidth: 1,
       },
     ],
@@ -402,12 +573,110 @@ const SuperAdminDashboard = () => {
           <div className="bg-white rounded-lg border border-gray-200 p-6">
             {userRoleChartData && userRoleChartData.datasets[0].data.length > 0 ? (
               <div className="h-80">
-                <Doughnut data={userRoleChartData} options={chartOptions} />
+                <Bar data={userRoleChartData} options={chartOptions} />
               </div>
             ) : userRoleDistribution && userRoleDistribution.length === 0 ? (
               <div className="text-center py-8 text-gray-500">No user data available</div>
             ) : (
               <div className="text-center py-8 text-gray-500">Loading user role data...</div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* New Charts Section - Vendor Distribution & Order Statistics */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+        {/* Vendor Distribution per Order */}
+        <div>
+          <h3 className="text-xl font-bold text-gray-900 mb-4">Vendor Distribution per Order</h3>
+          <div className="bg-white rounded-lg border border-gray-200 p-6">
+            {vendorDistribution && vendorDistribution.length > 0 ? (
+              <div className="h-80">
+                <Bar 
+                  data={{
+                    labels: vendorDistribution.map(item => item.vendorName || 'Unknown'),
+                    datasets: [
+                      {
+                        label: 'Orders',
+                        data: vendorDistribution.map(item => item.orderCount),
+                        backgroundColor: '#3b82f6',
+                        borderColor: '#3b82f6',
+                        borderWidth: 1,
+                      },
+                      {
+                        label: 'Revenue',
+                        data: vendorDistribution.map(item => item.totalRevenue),
+                        backgroundColor: '#10b981',
+                        borderColor: '#10b981',
+                        borderWidth: 1,
+                      }
+                    ]
+                  }}
+                  options={{
+                    ...chartOptions,
+                    scales: {
+                      y: {
+                        beginAtZero: true,
+                        ticks: {
+                          callback: function(value) {
+                            return value;
+                          }
+                        }
+                      }
+                    }
+                  }}
+                />
+              </div>
+            ) : (
+              <div className="text-center py-8 text-gray-500">No vendor distribution data available</div>
+            )}
+          </div>
+        </div>
+
+        {/* Order Statistics */}
+        <div>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-xl font-bold text-gray-900">Order Statistics</h3>
+            <div className="flex items-center space-x-2">
+              <select
+                value={orderStatsPeriod}
+                onChange={(e) => setOrderStatsPeriod(e.target.value)}
+                className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="today">Today</option>
+                <option value="week">Last Week</option>
+                <option value="month">Last Month</option>
+                <option value="year">Last Year</option>
+                <option value="all">All Time</option>
+              </select>
+              <select
+                value={orderStatsGroupBy}
+                onChange={(e) => setOrderStatsGroupBy(e.target.value)}
+                className="px-3 py-1.5 text-sm border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="day">By Day</option>
+                <option value="week">By Week</option>
+                <option value="month">By Month</option>
+                <option value="year">By Year</option>
+              </select>
+            </div>
+          </div>
+          <div className="bg-white rounded-lg border border-gray-200 p-6">
+            {orderStatistics && orderStatistics.length > 0 ? (
+              <div className="h-80">
+                <LineChart 
+                  data={orderStatistics.map(item => ({
+                    name: item.label,
+                    orders: item.orderCount,
+                    revenue: item.paidRevenue
+                  }))}
+                  dataKeys={['orders', 'revenue']}
+                  height={320}
+                  colors={['#3b82f6', '#10b981']}
+                />
+              </div>
+            ) : (
+              <div className="text-center py-8 text-gray-500">No order statistics data available</div>
             )}
           </div>
         </div>
@@ -457,41 +726,12 @@ const SuperAdminDashboard = () => {
       )}
 
       {/* Recent Activity */}
-      <div>
-        <h3 className="text-xl font-bold text-gray-900 mb-4">Recent Marketplace Activity</h3>
-        <div className="bg-white rounded-lg border border-gray-200 p-6">
-          {activitiesLoading ? (
-            <div className="text-center py-8 text-gray-500">Loading activities...</div>
-          ) : recentActivities && recentActivities.length > 0 ? (
-            <div className="space-y-4">
-              {recentActivities.map((activity, index) => (
-                <div 
-                  key={index} 
-                  className={`flex items-center justify-between py-3 ${
-                    index < recentActivities.length - 1 ? 'border-b border-gray-100' : ''
-                  }`}
-                >
-                  <div className="flex items-center space-x-3">
-                    <div className={`w-2 h-2 rounded-full ${
-                      activity.color === 'green' ? 'bg-green-500' :
-                      activity.color === 'blue' ? 'bg-blue-500' :
-                      activity.color === 'purple' ? 'bg-purple-500' :
-                      activity.color === 'yellow' ? 'bg-yellow-500' :
-                      activity.color === 'red' ? 'bg-red-500' : 'bg-gray-500'
-                    }`}></div>
-                    <span className="text-sm text-gray-600">{activity.message}</span>
-                  </div>
-                  <span className="text-xs text-gray-500">
-                    {formatTimeAgo(activity.timestamp)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="text-center py-8 text-gray-500">No recent activities</div>
-          )}
-        </div>
-      </div>
+      <RecentActivity 
+        activities={recentActivities}
+        loading={activitiesLoading}
+        onRefresh={fetchRecentActivities}
+        className="col-span-2"
+      />
     </div>
   );
 };
