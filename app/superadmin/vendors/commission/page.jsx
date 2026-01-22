@@ -87,11 +87,14 @@ export default function CommissionSettings() {
         // The commission endpoint returns only active vendors with commission data and verification status
         const transformedVendors = vendorResponse.data.map(vendor => ({
           ...vendor,
+          // Normalize ID field - handle both id and _id formats
+          id: vendor.id || vendor._id || vendor.vendorId,
           // Ensure both verification fields are consistent
           verified: vendor.verified || false,
           isVerified: vendor.verified || false,
           businessName: vendor.businessName || 'N/A'
         }));
+        console.log('🔍 Transformed vendors:', transformedVendors.map(v => ({ id: v.id, name: v.name, email: v.email })));
         setVendors(transformedVendors);
       }
     } catch (error) {
@@ -122,16 +125,24 @@ export default function CommissionSettings() {
   };
 
   const handleVendorCommissionUpdate = async (vendorId, newCommissionRate) => {
+    if (!vendorId || vendorId === 'undefined') {
+      console.error('❌ Invalid vendor ID:', vendorId);
+      alert('Error: Invalid vendor ID. Please refresh the page and try again.');
+      return;
+    }
+
     try {
+      console.log('🔄 Updating commission for vendor:', vendorId, 'to rate:', newCommissionRate);
       const response = await commissionService.updateVendorCommission(vendorId, newCommissionRate);
       if (response.success) {
         // Update local state
         setVendors(prev => 
-          prev.map(vendor => 
-            vendor.id === vendorId 
+          prev.map(vendor => {
+            const normalizedVendorId = vendor.id || vendor._id || vendor.vendorId;
+            return normalizedVendorId === vendorId
               ? { ...vendor, commissionRate: newCommissionRate, hasCustomCommission: true }
-              : vendor
-          )
+              : vendor;
+          })
         );
         alert('Vendor commission updated successfully!');
       } else {
@@ -158,6 +169,12 @@ export default function CommissionSettings() {
   const handleCommissionSubmit = async () => {
     if (!selectedVendor || !commissionRate) return;
     
+    const vendorId = selectedVendor.id || selectedVendor._id || selectedVendor.vendorId;
+    if (!vendorId || vendorId === 'undefined') {
+      alert('Error: Invalid vendor ID. Please refresh the page and try again.');
+      return;
+    }
+    
     const rate = parseFloat(commissionRate);
     if (isNaN(rate) || rate < 0 || rate > 100) {
       alert('Please enter a valid commission rate between 0 and 100');
@@ -165,7 +182,7 @@ export default function CommissionSettings() {
     }
 
     try {
-      await handleVendorCommissionUpdate(selectedVendor.id, rate);
+      await handleVendorCommissionUpdate(vendorId, rate);
       closeCommissionModal();
     } catch (error) {
       console.error('Error updating commission:', error);
@@ -474,7 +491,15 @@ export default function CommissionSettings() {
                                   <input
                                     type="number"
                                     value={vendor.commissionRate || 10}
-                                    onChange={(e) => handleVendorCommissionUpdate(vendor.id, parseFloat(e.target.value))}
+                                    onChange={(e) => {
+                                      const vendorId = vendor.id || vendor._id || vendor.vendorId;
+                                      if (!vendorId) {
+                                        console.error('❌ Vendor ID is missing:', vendor);
+                                        alert('Error: Vendor ID is missing. Please refresh the page.');
+                                        return;
+                                      }
+                                      handleVendorCommissionUpdate(vendorId, parseFloat(e.target.value));
+                                    }}
                                     className="w-20 px-2 py-1 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                                     min="0"
                                     max="100"
